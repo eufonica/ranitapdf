@@ -448,7 +448,7 @@ body.nav-open #panel{left:calc(76px + 280px + 6px)}
 </div>
 <dialog id="helpDlg" class="wide">
   <h2>Cómo usar ranitapdf</h2>
-  <p class="ver">Versión 11</p>
+  <p class="ver">Versión 12</p>
   <ol class="help">
     <li><b>Abre un PDF</b> con "Abrir PDF" o arrastra el archivo a la ventana.</li>
     <li><b>Escribe con el lápiz:</b> elige Bolígrafo, Marcador o Resaltador en la barra de herramientas y dibuja sobre la página. Tu mano apoyada no escribe.</li>
@@ -549,24 +549,35 @@ function pathOps(pts,sharp){
   ops.push({t:'l',p:pts[n-1]});
   return ops;
 }
-function varShapes(a){
-  const pts=a.pts, pr=a.pr, n=pts.length, rad=i=>a.size*(.35+1.3*Math.pow(clamp(pr[i],0,1),.8))/2;
-  const quads=[], circles=[{c:pts[0],r:rad(0)}]; let pdx=0, pdy=0, pl=0;
-  for(let i=1;i<n;i++){
-    const p0=pts[i-1], p1=pts[i], dx=p1[0]-p0[0], dy=p1[1]-p0[1], l=Math.hypot(dx,dy); if(l<1e-6) continue;
-    const nx=-dy/l, ny=dx/l, r0=rad(i-1), r1=rad(i);
-    if(pl && (dx*pdx+dy*pdy)/(l*pl)<.98) circles.push({c:p0,r:r0});
-    quads.push([[p0[0]+nx*r0,p0[1]+ny*r0],[p1[0]+nx*r1,p1[1]+ny*r1],[p1[0]-nx*r1,p1[1]-ny*r1],[p0[0]-nx*r0,p0[1]-ny*r0]]);
-    pdx=dx; pdy=dy; pl=l;
+function varShapes(a,step){
+  /* Trazo con presión: curva suave por el medio y contorno redondeado (sin esquinas ni cuadrados) */
+  step=step||.8; const P=a.pts, pr=a.pr, n=P.length, rad=i=>a.size*(.35+1.3*Math.pow(clamp(pr[i],0,1),.8))/2;
+  const S0=[{x:P[0][0],y:P[0][1],r:rad(0)}];
+  if(n===2){ const L=Math.hypot(P[1][0]-P[0][0],P[1][1]-P[0][1]), k=Math.max(1,Math.ceil(L/step)); for(let j=1;j<=k;j++){ const t=j/k; S0.push({x:P[0][0]+(P[1][0]-P[0][0])*t, y:P[0][1]+(P[1][1]-P[0][1])*t, r:rad(0)+(rad(1)-rad(0))*t}); } }
+  else if(n>2){
+    let sx=P[0][0], sy=P[0][1], sr=rad(0);
+    for(let i=1;i<n-1;i++){
+      const ex=(P[i][0]+P[i+1][0])/2, ey=(P[i][1]+P[i+1][1])/2, er=(rad(i)+rad(i+1))/2, cr=rad(i);
+      const L=Math.hypot(P[i][0]-sx,P[i][1]-sy)+Math.hypot(ex-P[i][0],ey-P[i][1]), k=Math.max(1,Math.ceil(L/step));
+      for(let j=1;j<=k;j++){ const t=j/k, u=1-t; S0.push({x:u*u*sx+2*u*t*P[i][0]+t*t*ex, y:u*u*sy+2*u*t*P[i][1]+t*t*ey, r:u*u*sr+2*u*t*cr+t*t*er}); }
+      sx=ex; sy=ey; sr=er;
+    }
+    const lx=P[n-1][0], ly=P[n-1][1], lr=rad(n-1), L=Math.hypot(lx-sx,ly-sy), k=Math.max(1,Math.ceil(L/step));
+    for(let j=1;j<=k;j++){ const t=j/k; S0.push({x:sx+(lx-sx)*t, y:sy+(ly-sy)*t, r:sr+(lr-sr)*t}); }
   }
-  if(n>1) circles.push({c:pts[n-1],r:rad(n-1)});
-  return {quads,circles};
+  const poly=[], m=S0.length;
+  if(m===1){ const c=S0[0]; for(let q=0;q<20;q++){ const th=q/20*Math.PI*2; poly.push([c.x+c.r*Math.cos(th),c.y+c.r*Math.sin(th)]); } return {poly}; }
+  const tan=[]; for(let i=0;i<m;i++){ const a0=S0[Math.max(0,i-2)], b0=S0[Math.min(m-1,i+2)]; let dx=b0.x-a0.x, dy=b0.y-a0.y; const l=Math.hypot(dx,dy)||1; tan.push([dx/l,dy/l]); }
+  for(let i=0;i<m;i++){ const c=S0[i], t=tan[i]; poly.push([c.x-t[1]*c.r, c.y+t[0]*c.r]); }
+  { const c=S0[m-1], t=tan[m-1], a0=Math.atan2(t[0],-t[1]); for(let q=1;q<10;q++){ const th=a0-q/10*Math.PI; poly.push([c.x+c.r*Math.cos(th),c.y+c.r*Math.sin(th)]); } }
+  for(let i=m-1;i>=0;i--){ const c=S0[i], t=tan[i]; poly.push([c.x+t[1]*c.r, c.y-t[0]*c.r]); }
+  { const c=S0[0], t=tan[0], a0=Math.atan2(-t[0],t[1]); for(let q=1;q<10;q++){ const th=a0-q/10*Math.PI; poly.push([c.x+c.r*Math.cos(th),c.y+c.r*Math.sin(th)]); } }
+  return {poly};
 }
 function drawStroke(c,s,z){
   if(s.pr){
-    const sh=varShapes(s); c.save(); c.globalAlpha=s.alpha; c.fillStyle=s.color; c.beginPath();
-    for(const q of sh.quads){ c.moveTo(q[0][0]*z,q[0][1]*z); for(let k=1;k<4;k++) c.lineTo(q[k][0]*z,q[k][1]*z); c.closePath(); }
-    for(const ci of sh.circles){ c.moveTo((ci.c[0]+ci.r)*z,ci.c[1]*z); c.arc(ci.c[0]*z,ci.c[1]*z,ci.r*z,0,Math.PI*2,true); c.closePath(); }
+    const sh=varShapes(s,Math.max(.12,1.1/z)); c.save(); c.globalAlpha=s.alpha; c.fillStyle=s.color; c.beginPath();
+    sh.poly.forEach((q,i)=>i?c.lineTo(q[0]*z,q[1]*z):c.moveTo(q[0]*z,q[1]*z)); c.closePath();
     c.fill(); c.restore(); return;
   }
   c.save(); c.globalAlpha=s.alpha; c.strokeStyle=s.color; c.lineWidth=s.size*z; c.lineCap=s.cap; c.lineJoin='round'; c.beginPath();
@@ -1653,14 +1664,8 @@ async function buildPdf(){
         const pp=v=>{ const r=P(v[0],v[1]); return nf(r[0])+' '+nf(r[1]); };
         const gsOn=(a.alpha<1 || a.tool==='highlighter'); let cs=(gsOn?'/GS gs\n':''), avgW=a.size;
         if(a.pr){
-          const sh=varShapes(a); cs+=`${nf(c[0])} ${nf(c[1])} ${nf(c[2])} rg\n`;
-          for(const qd of sh.quads) cs+=`${pp(qd[0])} m ${pp(qd[1])} l ${pp(qd[2])} l ${pp(qd[3])} l h\n`;
-          for(const ci of sh.circles){
-            const k=.5523, cx=ci.c[0], cy=ci.c[1], r=ci.r; cs+=pp([cx+r,cy])+' m\n';
-            for(let m=0;m<4;m++){ const th=-m*Math.PI/2, ph=th-Math.PI/2, P3=[cx+r*Math.cos(ph),cy+r*Math.sin(ph)];
-              cs+=pp([cx+r*Math.cos(th)+k*r*Math.sin(th), cy+r*Math.sin(th)-k*r*Math.cos(th)])+' '+pp([P3[0]-k*r*Math.sin(ph), P3[1]+k*r*Math.cos(ph)])+' '+pp(P3)+' c\n'; }
-            cs+='h\n';
-          }
+          const sh=varShapes(a,.5); cs+=`${nf(c[0])} ${nf(c[1])} ${nf(c[2])} rg\n`;
+          sh.poly.forEach((q,k)=>{ cs+=pp(q)+(k?' l\n':' m\n'); }); cs+='h\n';
           cs+='f'; avgW=a.pr.reduce((t,v)=>t+a.size*(.35+1.3*Math.pow(clamp(v,0,1),.8)),0)/a.pr.length;
         } else {
           cs+=`${nf(c[0])} ${nf(c[1])} ${nf(c[2])} RG\n${nf(a.size)} w ${a.cap==='butt'?0:1} J 1 j\n`; let cur=null;
