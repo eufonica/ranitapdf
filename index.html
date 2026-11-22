@@ -448,7 +448,7 @@ body.nav-open #panel{left:calc(76px + 280px + 6px)}
 </div>
 <dialog id="helpDlg" class="wide">
   <h2>Cómo usar ranitapdf</h2>
-  <p class="ver">Versión 12</p>
+  <p class="ver">Versión 13</p>
   <ol class="help">
     <li><b>Abre un PDF</b> con "Abrir PDF" o arrastra el archivo a la ventana.</li>
     <li><b>Escribe con el lápiz:</b> elige Bolígrafo, Marcador o Resaltador en la barra de herramientas y dibuja sobre la página. Tu mano apoyada no escribe.</li>
@@ -635,6 +635,7 @@ function winFor(p,bud){
   }
 }
 function covers(win,p){ const n=needRect(p,60); if(n.x1<=n.x0 || n.y1<=n.y0) return true; return win.x<=n.x0+.5 && win.x+win.w>=n.x1-.5 && win.y<=n.y0+.5 && win.y+win.h>=n.y1-.5; }
+const placePct=(cv,w,p)=>{ const W=p.w*S.zoom, H=p.h*S.zoom; cv.style.left=(w.x/W*100)+'%'; cv.style.top=(w.y/H*100)+'%'; cv.style.width=(w.w/W*100)+'%'; cv.style.height=(w.h/H*100)+'%'; };
 const placeCv=(cv,w)=>{ cv.style.left=w.x+'px'; cv.style.top=w.y+'px'; cv.style.width=w.w+'px'; cv.style.height=w.h+'px'; };
 function sizeCanvases(p){
   const win=winFor(p,INKBUD); p.win=win; p.k=Math.min(dpr, Math.sqrt(INKBUD/Math.max(1,win.w*win.h)));
@@ -660,7 +661,7 @@ async function renderPdf(p){
   p.rbase=base; p.rwin=win; p.rkey=key; await ensurePage(p); if(p.rkey!==key || !p.proxy) return; loadText(p);
   if(p.task){ try{ p.task.cancel(); }catch(e){} }
   const kp=Math.min(dpr, Math.sqrt(PDFBUD/Math.max(1,win.w*win.h))), vp=p.proxy.getViewport({scale:S.zoom*kp, offsetX:-win.x*kp, offsetY:-win.y*kp});
-  const c=document.createElement('canvas'); c.className='pdf'; c.width=Math.max(1,Math.round(win.w*kp)); c.height=Math.max(1,Math.round(win.h*kp)); placeCv(c,win);
+  const c=document.createElement('canvas'); c.className='pdf'; c.width=Math.max(1,Math.round(win.w*kp)); c.height=Math.max(1,Math.round(win.h*kp)); placePct(c,win,p);
   const task=p.proxy.render({canvasContext:c.getContext('2d'), viewport:vp}); p.task=task;
   try{ await task.promise; if(p.rkey!==key) return; const old=p.pdfCanvas; p.pdfCanvas.replaceWith(c); p.pdfCanvas=c; old.width=old.height=0; }
   catch(e){ if(e && e.name!=='RenderingCancelledException'){ p.rkey=null; p.rbase=null; } }
@@ -707,13 +708,14 @@ function fitNow(){ const p=S.pages[S.cur]||S.pages[0]; return fitFor(p.w,p.h); }
 function applyFit(mode){ if(!S.pages.length) return; S.fitMode=mode; setZoom(fitNow()); S.autoFit=true; $('#zoomv').textContent=Math.round(S.zoom*100)+'%';
   if(mode==='page'){ const p=S.pages[S.cur]; viewer.scrollTo({top:p.wrap.offsetTop-12}); } }
 
-function setZoom(z){
+function setZoom(z,anchor){
   S.autoFit=false; z=clamp(z,.4,10); if(Math.abs(z-S.zoom)<.0005) return;
-  const v=viewer, cx=(v.scrollLeft+v.clientWidth/2)/v.scrollWidth, cy=(v.scrollTop+v.clientHeight/2)/v.scrollHeight;
+  const v=viewer, cx=(v.scrollLeft+v.clientWidth/2)/v.scrollWidth, cy=(v.scrollTop+v.clientHeight/2)/v.scrollHeight, ratio=z/S.zoom;
   S.zoom=z; S.pages.forEach(layoutPage);
-  v.scrollLeft=cx*v.scrollWidth-v.clientWidth/2; v.scrollTop=cy*v.scrollHeight-v.clientHeight/2;
+  if(anchor){ v.scrollLeft=anchor.cx*ratio-anchor.sx; v.scrollTop=anchor.cy*ratio-anchor.sy; }
+  else { v.scrollLeft=cx*v.scrollWidth-v.clientWidth/2; v.scrollTop=cy*v.scrollHeight-v.clientHeight/2; }
   $('#zoomv').textContent=Math.round(z*100)+'%'; updateScrub(); rewindowAll();
-  clearTimeout(S.zt); S.zt=setTimeout(()=>S.pages.forEach(p=>p.visible&&renderPdf(p)),160);
+  clearTimeout(S.zt); S.zt=setTimeout(()=>S.pages.forEach(p=>p.visible&&renderPdf(p)),70);
 }
 function updatePageInd(){
   if(!S.pages.length) return; const mid=viewer.scrollTop+viewer.clientHeight/2; let cur=0;
@@ -1177,12 +1179,20 @@ function down(p,e){
   else if(tool==='eraser'){ G.mode='erase'; G.removed=[]; const pt=ptOf(e); p.eraserPos=pt; erasePoint(p,pt,G.removed); sched(p); }
   else { G.mode='tap'; }
 }
+function commitPinch(){
+  if(S.pzr){ cancelAnimationFrame(S.pzr); S.pzr=0; }
+  const pg=$('#pages'), g=G; pg.style.transform=''; pg.style.transformOrigin=''; pg.style.willChange='';
+  if(g.mode!=='pinch' || Math.abs(g.s-1)<.01) return;
+  const vr=viewer.getBoundingClientRect(); setZoom(g.z0*g.s,{cx:g.cx,cy:g.cy,sx:g.fx+g.dx-vr.left,sy:g.fy+g.dy-vr.top});
+}
 window.addEventListener('pointerdown', e=>{
   if(e.pointerType==='pen') S.lastPen=now();
   if(e.pointerType!=='touch' || isPalm(e)) return;
-  if(e.isPrimary){ touches.clear(); if(G.mode==='pinch') G={mode:null}; }
+  if(e.isPrimary){ touches.clear(); if(G.mode==='pinch'){ commitPinch(); G={mode:null}; } }
   touches.set(e.pointerId,{x:e.clientX,y:e.clientY});
-  if(touches.size===2){ cancelGesture(); const [a,b]=[...touches.values()]; G={mode:'pinch', d0:Math.hypot(a.x-b.x,a.y-b.y)||1, z0:S.zoom}; }
+  if(touches.size===2){ cancelGesture(); stopMomentum(); const [a,b]=[...touches.values()], mx=(a.x+b.x)/2, my=(a.y+b.y)/2, vr=viewer.getBoundingClientRect(), pr=$('#pages').getBoundingClientRect();
+    G={mode:'pinch', d0:Math.hypot(a.x-b.x,a.y-b.y)||1, z0:S.zoom, fx:mx, fy:my, cx:viewer.scrollLeft+mx-vr.left, cy:viewer.scrollTop+my-vr.top, s:1, dx:0, dy:0};
+    const pg=$('#pages'); pg.style.transformOrigin=(mx-pr.left)+'px '+(my-pr.top)+'px'; pg.style.willChange='transform'; }
 }, true);
 function cancelGesture(){
   document.body.classList.remove('inking');
@@ -1200,7 +1210,8 @@ function commitErase(){ const p=G.p, removed=G.removed.slice(); pushHist({ undo(
 window.addEventListener('pointermove', e=>{
   if(e.pointerType==='pen') S.lastPen=now();
   if(e.pointerType==='touch' && touches.has(e.pointerId)) touches.set(e.pointerId,{x:e.clientX,y:e.clientY});
-  if(G.mode==='pinch'){ if(touches.size>=2){ const [a,b]=[...touches.values()]; S.pz=G.z0*Math.hypot(a.x-b.x,a.y-b.y)/G.d0; if(!S.pzr) S.pzr=requestAnimationFrame(()=>{ S.pzr=0; setZoom(S.pz); }); } return; }
+  if(G.mode==='pinch'){ if(touches.size>=2){ const [a,b]=[...touches.values()]; G.s=clamp(G.z0*Math.hypot(a.x-b.x,a.y-b.y)/G.d0,.4,10)/G.z0; G.dx=(a.x+b.x)/2-G.fx; G.dy=(a.y+b.y)/2-G.fy;
+      if(!S.pzr) S.pzr=requestAnimationFrame(()=>{ S.pzr=0; if(G.mode==='pinch') $('#pages').style.transform=`translate(${G.dx}px,${G.dy}px) scale(${G.s})`; }); } return; }
   if(!G.mode){ const t=e.target; if(t && t.classList && t.classList.contains('ink') && S.tool==='eraser' && e.pointerType!=='touch'){ const p=t._p, r=p.wrap.getBoundingClientRect(); p.eraserPos=[(e.clientX-r.left)/S.zoom,(e.clientY-r.top)/S.zoom]; sched(p); } return; }
   if(e.pointerId!==G.pid) return;
   const p=G.p;
@@ -1232,7 +1243,7 @@ window.addEventListener('pointermove', e=>{
 function endPointer(e){ document.body.classList.remove('inking'); try{ endPointerInner(e); }catch(err){ console.error(err); G={mode:null}; } }
 function endPointerInner(e){
   if(e.pointerType==='touch') touches.delete(e.pointerId);
-  if(G.mode==='pinch'){ if(touches.size<2) G={mode:null}; return; }
+  if(G.mode==='pinch'){ if(touches.size<2){ commitPinch(); G={mode:null}; } return; }
   if(!G.mode || e.pointerId!==G.pid) return;
   const p=G.p, cancel=e.type==='pointercancel', mode=G.mode;
   if(mode==='draw'){
